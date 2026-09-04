@@ -165,6 +165,7 @@ def build_legacy_pdf(data: dict) -> bytes:
     return buffer.getvalue()
 
 MODEL_REFERENCE = Path(__file__).parent / "work" / "magistratura_crest_reference.png"
+JUDICIARY_CREST = Path(__file__).parent / "assets" / "poder_judiciario_brasao.png"
 
 
 def draw_document_page(canvas, doc):
@@ -425,6 +426,90 @@ def draw_pacification_page(canvas, doc):
     canvas.restoreState()
 
 
+def draw_approval_page(canvas, doc):
+    """First-page heading matching the formal deferment model."""
+    width, height = A4
+    canvas.saveState()
+    if doc.page == 1:
+        if JUDICIARY_CREST.exists():
+            canvas.drawImage(str(JUDICIARY_CREST), (width - 2.8 * cm) / 2, height - 4.4 * cm, width=2.8 * cm, height=2.55 * cm, mask="auto")
+        canvas.setFillColor(colors.black)
+        canvas.setFont("Helvetica-Bold", 10.5)
+        canvas.drawCentredString(width / 2, height - 4.85 * cm, "Poder Judiciário da Cidade Alta - RJ")
+        canvas.drawCentredString(width / 2, height - 5.7 * cm, "Comarca da Cidade Alta Vara")
+        canvas.drawCentredString(width / 2, height - 6.55 * cm, "Criminal")
+    else:
+        canvas.setStrokeColor(colors.HexColor("#a27c1d"))
+        canvas.setLineWidth(0.6)
+        canvas.line(2.2 * cm, height - 1.7 * cm, width - 2.2 * cm, height - 1.7 * cm)
+        canvas.setFont("Helvetica-Bold", 8)
+        canvas.drawCentredString(width / 2, height - 1.4 * cm, "PODER JUDICIÁRIO CIDADE ALTA RJ")
+    canvas.restoreState()
+
+
+def build_pacification_table(findings: list[dict], text_style: ParagraphStyle) -> Table:
+    rows = [[Paragraph("Requisito", text_style), Paragraph("Resultado", text_style)]]
+    for item in findings:
+        status = "CONFERIDO" if item["passed"] else "NÃO COMPROVADO"
+        rows.append([Paragraph(escape(item["title"]), text_style), Paragraph(status, text_style)])
+    table = Table(rows, colWidths=[10.2 * cm, 4.2 * cm], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e5df")),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#777777")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TEXTCOLOR", (1, 1), (1, -1), colors.HexColor("#7a1f1c")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    return table
+
+
+def build_approved_pacification_decision(
+    case_number: str,
+    applicant: str,
+    area: str,
+    findings: list[dict],
+    legal_name: str,
+    legal_id: str,
+    signature: bytes | None,
+    manual_override: bool,
+) -> bytes:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2.45 * cm, rightMargin=2.45 * cm, topMargin=8.7 * cm, bottomMargin=2.0 * cm, title="Decisão de Pacificação - Deferida")
+    base = getSampleStyleSheet()
+    body = ParagraphStyle("ApprovedBody", parent=base["Normal"], fontName="Helvetica", fontSize=10.4, leading=15.5, alignment=TA_JUSTIFY, spaceAfter=13)
+    heading = ParagraphStyle("ApprovedHeading", parent=body, fontName="Helvetica-Bold", fontSize=12.5, leading=16, spaceBefore=17, spaceAfter=16)
+    centered = ParagraphStyle("ApprovedCentered", parent=body, fontName="Helvetica-Bold", alignment=TA_CENTER, spaceAfter=11)
+    details = ParagraphStyle("ApprovedDetails", parent=body, fontName="Helvetica-Bold", alignment=TA_LEFT, spaceAfter=3)
+    table_text = ParagraphStyle("ApprovedTable", parent=body, fontSize=8.6, leading=10.5, spaceAfter=0)
+    decision_basis = "As provas coligidas aos autos revelam-se consistentes, idôneas e suficientes à formação do convencimento deste Juízo." if not manual_override else "Após conferência expressa do responsável jurídico, o conjunto documental foi considerado suficiente para a deliberação."
+    story = [
+        Paragraph("PODER JUDICIÁRIO CIDADE ALTA RJ", centered),
+        Paragraph(f"<b>Processo n°:</b> {escape(case_number or 'Não informado')}", details),
+        Paragraph(f"<b>Interessado:</b> {escape(applicant or 'Não informado')}", details),
+        Paragraph(f"<b>Pedido de Pacificação de Área controlada por Organização Criminosa</b><br/>“{escape(area or 'Área não informada')}”", details),
+        Paragraph(f"<b>Jurídico responsável:</b> {escape(legal_name)} {escape(legal_id)}", details),
+        Paragraph("DECISÃO", heading),
+        Paragraph(f"Trata-se de pedido formulado por {escape(applicant or 'órgão requerente não identificado')}, visando à autorização judicial para adoção de medidas destinadas à pacificação de área atualmente sob domínio de organização criminosa denominada “{escape(area or 'não informada')}”.", body),
+        Paragraph(decision_basis, body),
+        Paragraph("Verifica-se que o conjunto probatório evidencia, de forma clara e objetiva, a necessidade da medida, em atenção à ordem pública, à segurança coletiva e à efetividade da atuação institucional.", body),
+        Paragraph("CONFERÊNCIA DOS REQUISITOS", heading),
+        build_pacification_table(findings, table_text),
+        Paragraph("Diante do exposto, <b>DEFIRO</b> o pedido de pacificação, autorizando a adoção das providências necessárias à sua implementação, nos termos das normas aplicáveis.", body),
+        Paragraph("Publique-se. Registre-se. Cumpra-se.", body),
+        Paragraph("Cidade Alta, " + date.today().strftime("%d/%m/%Y") + ".", body),
+        Spacer(1, 13),
+    ]
+    signature_image = signature_flowable(signature)
+    if signature_image:
+        story += [signature_image, Spacer(1, 4)]
+    story += [Paragraph(escape(legal_name or "Jurídico responsável"), centered), Paragraph(escape(legal_id), centered), Paragraph("Magistratura", centered)]
+    doc.build(story, onFirstPage=draw_approval_page, onLaterPages=draw_approval_page)
+    return buffer.getvalue()
+
+
 def build_pacification_decision(
     case_number: str,
     applicant: str,
@@ -437,6 +522,10 @@ def build_pacification_decision(
     manual_override: bool,
 ) -> bytes:
     approved = decision == "Deferir"
+    if approved:
+        return build_approved_pacification_decision(
+            case_number, applicant, area, findings, legal_name, legal_id, signature, manual_override
+        )
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=3.18 * cm, rightMargin=2 * cm, topMargin=4.1 * cm, bottomMargin=1.05 * cm, title="Decisão de Pacificação")
     base = getSampleStyleSheet()
@@ -452,22 +541,7 @@ def build_pacification_decision(
         Paragraph("II - DA ANÁLISE DOCUMENTAL", heading),
         Paragraph("Foram conferidas as referências documentais apresentadas na representação. A leitura automática serve como apoio à análise e a conclusão final abaixo observa a conferência realizada pelo responsável jurídico.", body),
     ]
-    rows = [[Paragraph("Requisito", table_text), Paragraph("Resultado", table_text)]]
-    for item in findings:
-        status = "CONFERIDO" if item["passed"] else "NÃO COMPROVADO"
-        rows.append([Paragraph(escape(item["title"]), table_text), Paragraph(status, table_text)])
-    table = Table(rows, colWidths=[10.2 * cm, 4.2 * cm], repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e5df")),
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#777777")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TEXTCOLOR", (1, 1), (1, -1), colors.HexColor("#7a1f1c")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-    story.append(table)
+    story.append(build_pacification_table(findings, table_text))
     missing = [item for item in findings if not item["passed"]]
     story += [Spacer(1, 12), Paragraph("III - DECISÃO", heading)]
     if approved:
