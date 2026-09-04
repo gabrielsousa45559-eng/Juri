@@ -9,11 +9,12 @@ import unicodedata
 
 import streamlit as st
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     HRFlowable,
     Image as RLImage,
@@ -363,6 +364,33 @@ def evidence_snippet(text: str, terms: tuple[str, ...]) -> str:
     return "Não localizado no texto extraível do documento."
 
 
+URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", flags=re.IGNORECASE)
+
+
+def repair_wrapped_urls(text: str) -> str:
+    """Recompose URL tokens split by a PDF line wrap without joining normal prose."""
+    repaired_lines: list[str] = []
+    for line in text.splitlines():
+        candidate = line.strip()
+        previous = repaired_lines[-1] if repaired_lines else ""
+        url_match = URL_PATTERN.search(previous)
+        continuation = re.fullmatch(r"[A-Za-z0-9_~%=&?/#.+-]{8,}", candidate or "")
+        if url_match and continuation and not re.search(r"[.);,:]$", previous):
+            repaired_lines[-1] = previous.rstrip() + candidate
+        else:
+            repaired_lines.append(line)
+    return "\n".join(repaired_lines)
+
+
+def extract_document_urls(text: str) -> list[str]:
+    urls = []
+    for match in URL_PATTERN.finditer(text):
+        url = match.group(0).rstrip(".,;:)]}")
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
 def extract_pdf_text(pdf_bytes: bytes) -> str:
     try:
         from pypdf import PdfReader
@@ -373,22 +401,31 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 def review_pacification_pdf(pdf_bytes: bytes) -> tuple[list[dict], str]:
-    source = normalized(extract_pdf_text(pdf_bytes))
-    has_link = any(marker in source for marker in ("http", "medal", "clip"))
+    original_source = repair_wrapped_urls(extract_pdf_text(pdf_bytes))
+    source = normalized(original_source)
+    urls = extract_document_urls(original_source)
+    has_link_reference = any(marker in source for marker in ("http", "www", "medal", "youtube", "clip"))
     findings = []
     for title, groups, guidance in PACIFICATION_REQUIREMENTS:
         matched = all(any_words_match(source, group) for group in groups)
-        if title not in {"Investigadores identificados", "Departamento policial"}:
-            matched = matched and has_link
+        requires_link = title not in {"Investigadores identificados", "Departamento policial"}
+        if requires_link and not urls:
+            suggested_status = "Não verificado" if has_link_reference else "Não comprovado"
+        elif matched:
+            suggested_status = "Comprovado"
+        else:
+            suggested_status = "Não comprovado"
         if title == "Lideranças identificadas":
             role_references = len(re.findall(r"\b(?:01|02|gerente|sub lider)\b", source))
-            matched = matched and role_references >= 3
+            if suggested_status == "Comprovado" and role_references < 3:
+                suggested_status = "Não comprovado"
         if title == "Confissão individual de função":
             role_pattern = r"(lider|sub lider|gerente).*?(confess|afirm)"
             reverse_pattern = r"(confess|afirm).*?(lider|sub lider|gerente)"
             role_count = len(re.findall(r"\b(?:01|02|gerente|sub lider)\b", source))
-            matched = matched and role_count >= 3 and bool(re.search(role_pattern, source) or re.search(reverse_pattern, source))
-        findings.append({"title": title, "passed": matched, "guidance": guidance, "evidence": evidence_snippet(source, groups)})
+            if suggested_status == "Comprovado" and (role_count < 3 or not (re.search(role_pattern, source) or re.search(reverse_pattern, source))):
+                suggested_status = "Não comprovado"
+        findings.append({"title": title, "passed": suggested_status == "Comprovado", "status": suggested_status, "guidance": guidance, "evidence": evidence_snippet(source, groups), "urls": urls})
     return findings, source
 
 
@@ -447,10 +484,144 @@ def draw_approval_page(canvas, doc):
     canvas.restoreState()
 
 
+STANDARD_BLUE = colors.HexColor("#173d71")
+
+
+class StandardDecisionCanvas(Canvas):
+    """Adds the final page count after ReportLab has laid out the document."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_page_states = []
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total_pages = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self.setFillColor(STANDARD_BLUE)
+            self.setFont("Times-Roman", 8)
+            self.drawRightString(A4[0] - 2.45 * cm, 1.25 * cm, f"Página {self._pageNumber} de {total_pages}")
+            Canvas.showPage(self)
+        Canvas.save(self)
+
+
+def draw_standard_decision_page(canvas, doc):
+    width, height = A4
+    canvas.saveState()
+    canvas.setFillColor(STANDARD_BLUE)
+    canvas.setFont("Times-Bold", 14)
+    canvas.drawCentredString(width / 2, height - 2.45 * cm, "PODER JUDICIÁRIO DO ESTADO DO RIO DE JANEIRO")
+    canvas.setFont("Times-Roman", 10)
+    canvas.drawCentredString(width / 2, height - 3.22 * cm, "Comarca de Cidade Alta - RJ")
+    canvas.setFont("Times-Italic", 10)
+    canvas.drawCentredString(width / 2, height - 3.82 * cm, "Vara de Execuções Criminais e Medidas de Segurança")
+    canvas.setStrokeColor(STANDARD_BLUE)
+    canvas.setLineWidth(1.2)
+    canvas.line(2.45 * cm, height - 4.38 * cm, width - 2.45 * cm, height - 4.38 * cm)
+    canvas.restoreState()
+
+
+def formal_date() -> str:
+    months = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
+    today = date.today()
+    return f"Cidade Alta - RJ, {today.day} de {months[today.month - 1]} de {today.year}."
+
+
+def build_standard_pacification_decision(
+    case_number: str,
+    applicant: str,
+    area: str,
+    findings: list[dict],
+    decision: str,
+    legal_name: str,
+    legal_id: str,
+    signature: bytes | None,
+    manual_override: bool,
+) -> bytes:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2.45 * cm, rightMargin=2.45 * cm, topMargin=5.05 * cm, bottomMargin=2.15 * cm, title=f"Decisão de Pacificação - {decision}")
+    base = getSampleStyleSheet()
+    body = ParagraphStyle("StandardDecisionBody", parent=base["Normal"], fontName="Times-Roman", fontSize=10.3, leading=15.2, alignment=TA_JUSTIFY, firstLineIndent=0.55 * cm, spaceAfter=10)
+    heading = ParagraphStyle("StandardDecisionHeading", parent=body, fontName="Times-Bold", fontSize=10.8, leading=14, textColor=STANDARD_BLUE, firstLineIndent=0, spaceBefore=12, spaceAfter=7)
+    table_label = ParagraphStyle("StandardTableLabel", parent=body, fontName="Times-Bold", fontSize=9.5, leading=12, textColor=STANDARD_BLUE, firstLineIndent=0)
+    table_value = ParagraphStyle("StandardTableValue", parent=body, fontName="Times-Roman", fontSize=9.5, leading=12, firstLineIndent=0)
+    check_text = ParagraphStyle("StandardCheck", parent=body, fontName="Times-Roman", fontSize=8.5, leading=10.5, firstLineIndent=0)
+    signature_text = ParagraphStyle("StandardSignature", parent=body, fontName="Times-Bold", fontSize=10.2, leading=13, alignment=TA_CENTER, textColor=STANDARD_BLUE, firstLineIndent=0)
+    approved = decision == "Deferir"
+    subject = "Pedido de Autorização para Operação de Pacificação e Busca e Apreensão Operacional"
+    metadata = [
+        [Paragraph("PROCESSO Nº:", table_label), Paragraph(escape(case_number or "Não informado"), table_value)],
+        [Paragraph("REQUERENTE:", table_label), Paragraph(escape(applicant or "Não informado"), table_value)],
+        [Paragraph("INVESTIGADOS:", table_label), Paragraph(f"Organização criminosa vinculada à área \"{escape(area or 'Não informada')}\".", table_value)],
+        [Paragraph("ASSUNTO:", table_label), Paragraph(subject, table_value)],
+    ]
+    metadata_table = Table(metadata, colWidths=[3.7 * cm, 11.65 * cm])
+    metadata_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f8fc")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#b9c8da")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    requirements_heading = Paragraph("QUADRO DE CONFERÊNCIA", heading)
+    story = [
+        metadata_table,
+        Paragraph("1. RELATÓRIO", heading),
+        HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9),
+        Paragraph("Vistos etc.", body),
+        Paragraph(f"Trata-se de requerimento de autorização para operação de pacificação formulado por {escape(applicant or 'o órgão requerente')}, referente à área identificada como \"{escape(area or 'não informada')}\".", body),
+        Paragraph("Consta dos autos conjunto documental e audiovisual destinado à demonstração das circunstâncias investigadas, das lideranças identificadas e da necessidade das providências requeridas.", body),
+        Paragraph("2. FUNDAMENTAÇÃO", heading),
+        HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9),
+        Paragraph("Os elementos apresentados devem ser examinados em conjunto, observada a regularidade da representação, a coerência das evidências e a necessidade da medida diante da proteção da ordem pública e da segurança coletiva.", body),
+        Paragraph("A conferência abaixo registra a análise documental realizada pelo responsável jurídico. A decisão final considera esse controle e as informações constantes dos autos.", body),
+        requirements_heading,
+        build_pacification_table(findings, check_text),
+        Paragraph("3. DISPOSITIVO E DECISÃO", heading),
+        HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9),
+    ]
+    if approved:
+        basis = "acolho a conclusão da conferência jurídica" if not manual_override else "acolho a conclusão expressamente confirmada pelo responsável jurídico"
+        story += [
+            Paragraph(f"Ante o exposto, {basis} e <b>DEFIRO O PEDIDO DE PACIFICAÇÃO E INTERVENÇÃO OPERACIONAL</b> na área indicada, determinando:", body),
+            Paragraph("1. <b>AUTORIZAÇÃO PARA INGRESSO E PACIFICAÇÃO</b> nos pontos mapeados pelas forças de segurança, incluída a apreensão dos elementos vinculados à investigação.", body),
+            Paragraph("2. <b>EXPEDIÇÃO DAS MEDIDAS CABÍVEIS</b> em face dos investigados devidamente individualizados nos autos.", body),
+            Paragraph("3. <b>PRESERVAÇÃO E ENCAMINHAMENTO DAS PROVAS</b> às autoridades responsáveis, na forma aplicável.", body),
+            Table([[Paragraph("<b>Cumpra-se com urgência.</b> Expeçam-se as comunicações necessárias ao órgão requerente para execução das medidas e preservação da segurança coletiva.", body)]], colWidths=[15.35 * cm], style=TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef3f9")), ("LINEBEFORE", (0, 0), (0, -1), 3, STANDARD_BLUE), ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)])),
+        ]
+    else:
+        missing = [item["title"] for item in findings if not item["passed"]]
+        reason = "; ".join(missing) if missing else "insuficiência dos elementos analisados"
+        story += [
+            Paragraph(f"Ante o exposto, <b>INDEFIRO O PEDIDO DE PACIFICAÇÃO</b>, pois não houve comprovação suficiente dos requisitos obrigatórios, especialmente quanto a: {escape(reason)}.", body),
+            Table([[Paragraph("A nova representação poderá ser apresentada quando instruída com os elementos pendentes e as referências audiovisuais legíveis.", body)]], colWidths=[15.35 * cm], style=TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fff4f2")), ("LINEBEFORE", (0, 0), (0, -1), 3, colors.HexColor("#8b3030")), ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)])),
+        ]
+    story += [
+        Spacer(1, 22),
+        Paragraph(formal_date(), ParagraphStyle("StandardDate", parent=body, alignment=TA_RIGHT, firstLineIndent=0, spaceAfter=8)),
+    ]
+    signature_image = signature_flowable(signature)
+    if signature_image:
+        story += [signature_image, Spacer(1, 3)]
+    story += [
+        HRFlowable(width=5.7 * cm, thickness=0.7, color=colors.HexColor("#222222"), hAlign="CENTER", spaceBefore=2, spaceAfter=8),
+        Paragraph(escape(legal_name or "Jurídico responsável").upper(), signature_text),
+        Paragraph(f"Jurídico responsável - ID: {escape(legal_id or 'Não informado')}", ParagraphStyle("StandardRole", parent=signature_text, fontName="Times-Roman", fontSize=9.5, textColor=STANDARD_BLUE)),
+        Paragraph("Comarca de Cidade Alta - RJ", ParagraphStyle("StandardCourt", parent=signature_text, fontName="Times-Roman", fontSize=9.5, textColor=STANDARD_BLUE)),
+    ]
+    doc.build(story, onFirstPage=draw_standard_decision_page, onLaterPages=draw_standard_decision_page, canvasmaker=StandardDecisionCanvas)
+    return buffer.getvalue()
+
+
 def build_pacification_table(findings: list[dict], text_style: ParagraphStyle) -> Table:
     rows = [[Paragraph("Requisito", text_style), Paragraph("Resultado", text_style)]]
     for item in findings:
-        status = "CONFERIDO" if item["passed"] else "NÃO COMPROVADO"
+        status = {"Comprovado": "CONFERIDO", "Não verificado": "NÃO VERIFICADO"}.get(item.get("status"), "NÃO COMPROVADO")
         rows.append([Paragraph(escape(item["title"]), text_style), Paragraph(status, text_style)])
     table = Table(rows, colWidths=[10.2 * cm, 4.2 * cm], repeatRows=1)
     table.setStyle(TableStyle([
@@ -521,6 +692,10 @@ def build_pacification_decision(
     signature: bytes | None,
     manual_override: bool,
 ) -> bytes:
+    return build_standard_pacification_decision(
+        case_number, applicant, area, findings, decision, legal_name, legal_id, signature, manual_override
+    )
+
     approved = decision == "Deferir"
     if approved:
         return build_approved_pacification_decision(
@@ -587,6 +762,14 @@ def render_pacification_page():
         details = st.session_state.get("pacification_details", {})
         if any(details.values()):
             st.caption("Dados identificados no documento: " + " | ".join(f"{label}: {value}" for label, value in (("Processo", details.get("process")), ("Requerente", details.get("applicant")), ("Área", details.get("area"))) if value))
+        document_urls = findings[0].get("urls", [])
+        if document_urls:
+            st.caption(f"{len(document_urls)} link(s) recomposto(s) e identificado(s) no PDF.")
+            with st.expander("Links identificados no documento"):
+                for url in document_urls:
+                    st.link_button(url, url, use_container_width=True)
+        else:
+            st.info("Nenhum link legível foi identificado automaticamente. Itens dependentes de prova audiovisual ficam como não verificados até a conferência do jurídico.")
         st.subheader("Conferência do jurídico")
         reviewed_findings = []
         for index, item in enumerate(findings):
@@ -595,14 +778,21 @@ def render_pacification_page():
             left.caption(item["guidance"])
             with left.expander("Evidência localizada no PDF"):
                 st.write(item["evidence"])
-            initial_index = 0 if item["passed"] else 1
-            status = right.selectbox("Status", ["Comprovado", "Não comprovado"], index=initial_index, key=f"pacification_status_{index}", label_visibility="collapsed")
-            reviewed_findings.append({**item, "passed": status == "Comprovado"})
+            statuses = ["Comprovado", "Não comprovado", "Não verificado"]
+            initial_index = statuses.index(item.get("status", "Comprovado" if item["passed"] else "Não comprovado"))
+            status = right.selectbox("Status", statuses, index=initial_index, key=f"pacification_status_{index}", label_visibility="collapsed")
+            reviewed_findings.append({**item, "passed": status == "Comprovado", "status": status})
 
         approved = all(item["passed"] for item in reviewed_findings)
-        st.success("Todos os requisitos foram confirmados pelo jurídico.") if approved else st.warning("Há requisitos não comprovados. A decisão automática é de indeferimento.")
+        has_unproven = any(item["status"] == "Não comprovado" for item in reviewed_findings)
+        if approved:
+            st.success("Todos os requisitos foram confirmados pelo jurídico.")
+        elif has_unproven:
+            st.warning("Há requisitos não comprovados. A decisão automática é de indeferimento.")
+        else:
+            st.info("Há itens não verificados. Eles não causam indeferimento automático; confira os links e registre a decisão jurídica.")
         proceed = st.checkbox("Prosseguir mesmo havendo itens não comprovados", key="pacification_proceed")
-        can_choose_decision = approved or proceed
+        can_choose_decision = not has_unproven or proceed
         decision_options = ["Deferir", "Indeferir"] if can_choose_decision else ["Indeferir"]
         final_decision = st.selectbox("Decisão final", decision_options, key="pacification_final_decision")
         if not legal_name_value.strip():
