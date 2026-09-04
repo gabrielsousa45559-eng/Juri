@@ -182,10 +182,14 @@ def build_legacy_pdf(data: dict) -> bytes:
 
 MODEL_REFERENCE = Path(__file__).parent / "work" / "magistratura_crest_reference.png"
 JUDICIARY_CREST = Path(__file__).parent / "assets" / "poder_judiciario_brasao.png"
-SIGNATURE_FONT = Path(__file__).parent / "assets" / "Allura-Regular.ttf"
+SIGNATURE_FONTS = {
+    "Allura": Path(__file__).parent / "assets" / "Allura-Regular.ttf",
+    "GreatVibes": Path(__file__).parent / "assets" / "GreatVibes-Regular.ttf",
+}
 
-if SIGNATURE_FONT.exists():
-    pdfmetrics.registerFont(TTFont("Allura", str(SIGNATURE_FONT)))
+for font_name, font_path in SIGNATURE_FONTS.items():
+    if font_path.exists():
+        pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
 
 
 def draw_document_page(canvas, doc):
@@ -278,6 +282,7 @@ class TypedSignature(Flowable):
             "18 - Carta pessoal": ("Times-Italic", 24),
             "19 - Profissional": ("Helvetica-Bold", 15),
             "20 - Institucional": ("Times-Bold", 16),
+            "21 - Judicial clássica": ("GreatVibes", 18),
         }
         self.font, self.font_size = styles.get(style, styles["02 - Cursiva"])
         self.height = 0.95 * cm
@@ -297,7 +302,7 @@ def typed_signature_flowable(name: str, style: str):
 
 
 def signature_preview_class(style: str) -> str:
-    if style.startswith(("01", "02", "03", "04", "05")):
+    if style.startswith(("01", "02", "03", "04", "05", "21")):
         return "cursive"
     if style.startswith("06"):
         return "elegant"
@@ -831,7 +836,7 @@ def render_pacification_page():
     legal_id_value = legal_id.text_input("ID do jurídico responsável", key="pacification_legal_id")
     st.markdown("<div class='signature-studio'><p class='signature-studio-title'>Assinatura do documento</p><p class='signature-studio-copy'>Escolha uma assinatura digitada ou use uma imagem da assinatura real.</p></div>", unsafe_allow_html=True)
     signature_mode = st.segmented_control("Modo", ["Digitada", "Imagem"], default="Digitada", key="pacification_signature_mode")
-    signature_style = st.selectbox("Estilo da assinatura", ["01 - Caligrafia leve", "02 - Cursiva", "03 - Cursiva marcante", "04 - Cursiva discreta", "05 - Cursiva ampla", "06 - Elegante", "07 - Clássica", "08 - Tradicional", "09 - Chancela", "10 - Serifada forte", "11 - Formal", "12 - Executiva", "13 - Moderna", "14 - Moderna forte", "15 - Minimalista", "16 - Manuscrita", "17 - Monoespaçada", "18 - Carta pessoal", "19 - Profissional", "20 - Institucional"], key="pacification_signature_style", disabled=signature_mode != "Digitada")
+    signature_style = st.selectbox("Estilo da assinatura", ["01 - Caligrafia leve", "02 - Cursiva", "03 - Cursiva marcante", "04 - Cursiva discreta", "05 - Cursiva ampla", "06 - Elegante", "07 - Clássica", "08 - Tradicional", "09 - Chancela", "10 - Serifada forte", "11 - Formal", "12 - Executiva", "13 - Moderna", "14 - Moderna forte", "15 - Minimalista", "16 - Manuscrita", "17 - Monoespaçada", "18 - Carta pessoal", "19 - Profissional", "20 - Institucional", "21 - Judicial clássica"], key="pacification_signature_style", disabled=signature_mode != "Digitada")
     legal_signature = None
     if signature_mode == "Imagem":
         legal_signature = st.file_uploader("Imagem da assinatura", type=["png", "jpg", "jpeg"], key="pacification_signature", help="A imagem será inserida acima do nome no fim da decisão.")
