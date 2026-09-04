@@ -434,12 +434,13 @@ def any_words_match(text: str, choices: str) -> bool:
     return any(word in text for word in choices.split())
 
 
-def evidence_snippet(text: str, terms: tuple[str, ...]) -> str:
+def evidence_snippet(text: str, terms: tuple[str, ...], display_text: str | None = None) -> str:
+    display_text = display_text or text
     for group in terms:
         for word in group.split():
             position = text.find(word)
             if position >= 0:
-                return " ".join(text[max(0, position - 72):position + 180].split())
+                return " ".join(display_text[max(0, position - 72):position + 180].split())
     return "Não localizado no texto extraível do documento."
 
 
@@ -510,7 +511,7 @@ def review_pacification_pdf(pdf_bytes: bytes) -> tuple[list[dict], str]:
             role_count = len(re.findall(r"\b(?:01|02|gerente|sub lider)\b", source))
             if suggested_status == "Comprovado" and (role_count < 3 or not (re.search(role_pattern, source) or re.search(reverse_pattern, source))):
                 suggested_status = "Não comprovado"
-        findings.append({"title": title, "passed": suggested_status == "Comprovado", "status": suggested_status, "guidance": guidance, "evidence": evidence_snippet(source, groups), "urls": urls})
+        findings.append({"title": title, "passed": suggested_status == "Comprovado", "status": suggested_status, "guidance": guidance, "evidence": evidence_snippet(source, groups, original_source), "urls": urls})
     return findings, source
 
 
