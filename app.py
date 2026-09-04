@@ -14,9 +14,12 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     HRFlowable,
+    Flowable,
     Image as RLImage,
     KeepTogether,
     ListFlowable,
@@ -46,6 +49,18 @@ st.markdown(
         .mid-kicker { color: #e2bd72; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em; margin: 0; }
         .mid-title { color: #f4f0e7; font-size: 1.55rem; font-weight: 700; line-height: 1; margin: 0.2rem 0 0; }
         .mid-subtitle { color: #aca99f; margin: 0; font-size: 0.88rem; text-align: right; }
+        .signature-studio { margin: 0.7rem 0 1rem; padding: 0.1rem 0 0.1rem 0.85rem; border-left: 2px solid #c89d4a; }
+        .signature-studio-title { color: #e7c16f; font-size: 0.82rem; font-weight: 700; margin: 0 0 0.2rem; }
+        .signature-studio-copy { color: #a8a296; font-size: 0.78rem; margin: 0 0 0.75rem; }
+        .signature-preview { min-height: 5.2rem; display: flex; flex-direction: column; align-items: center; justify-content: center; border-top: 1px solid #45391f; background: #090a0b; color: #f1ebdc; margin-top: 0.75rem; }
+        .signature-preview-name { font-size: 2rem; line-height: 1.1; }
+        .signature-preview-meta { color: #a99e87; font-size: 0.72rem; margin-top: 0.45rem; }
+        .signature-preview.cursive .signature-preview-name { font-family: cursive; font-style: italic; font-size: 2.35rem; }
+        .signature-preview.elegant .signature-preview-name { font-family: Georgia, serif; font-style: italic; }
+        .signature-preview.classic .signature-preview-name { font-family: Georgia, serif; }
+        .signature-preview.formal .signature-preview-name { font-family: Arial, sans-serif; font-style: italic; }
+        .signature-preview.executive .signature-preview-name { font-family: Arial, sans-serif; font-weight: 700; font-style: italic; }
+        .signature-preview.mono .signature-preview-name { font-family: monospace; font-style: italic; }
         .mid-status { display: none; }
         div[data-testid="stForm"] { background: #121416; border: 1px solid #292d30; border-radius: 6px; padding: 1.65rem; }
         h3 { color: #e7c16f; font-size: 0.98rem !important; font-weight: 700 !important; letter-spacing: 0.04em; text-transform: uppercase; padding-bottom: 0.65rem; border-bottom: 1px solid #303437; }
@@ -167,6 +182,10 @@ def build_legacy_pdf(data: dict) -> bytes:
 
 MODEL_REFERENCE = Path(__file__).parent / "work" / "magistratura_crest_reference.png"
 JUDICIARY_CREST = Path(__file__).parent / "assets" / "poder_judiciario_brasao.png"
+SIGNATURE_FONT = Path(__file__).parent / "assets" / "Allura-Regular.ttf"
+
+if SIGNATURE_FONT.exists():
+    pdfmetrics.registerFont(TTFont("Allura", str(SIGNATURE_FONT)))
 
 
 def draw_document_page(canvas, doc):
@@ -232,6 +251,61 @@ def signature_flowable(signature: bytes | None):
     flowable = RLImage(BytesIO(signature), width=image_width * scale, height=image_height * scale)
     flowable.hAlign = "CENTER"
     return flowable
+
+
+class TypedSignature(Flowable):
+    def __init__(self, name: str, style: str):
+        super().__init__()
+        self.name = name
+        styles = {
+            "01 - Caligrafia leve": ("Allura", 22),
+            "02 - Cursiva": ("Allura", 29),
+            "03 - Cursiva marcante": ("Allura", 35),
+            "04 - Cursiva discreta": ("Allura", 25),
+            "05 - Cursiva ampla": ("Allura", 32),
+            "06 - Elegante": ("Times-Italic", 21),
+            "07 - Clássica": ("Times-Italic", 17),
+            "08 - Tradicional": ("Times-Roman", 18),
+            "09 - Chancela": ("Times-BoldItalic", 19),
+            "10 - Serifada forte": ("Times-Bold", 17),
+            "11 - Formal": ("Helvetica-Oblique", 17),
+            "12 - Executiva": ("Helvetica-BoldOblique", 16),
+            "13 - Moderna": ("Helvetica", 18),
+            "14 - Moderna forte": ("Helvetica-Bold", 17),
+            "15 - Minimalista": ("Helvetica-Oblique", 15),
+            "16 - Manuscrita": ("Courier-Oblique", 18),
+            "17 - Monoespaçada": ("Courier", 16),
+            "18 - Carta pessoal": ("Times-Italic", 24),
+            "19 - Profissional": ("Helvetica-Bold", 15),
+            "20 - Institucional": ("Times-Bold", 16),
+        }
+        self.font, self.font_size = styles.get(style, styles["02 - Cursiva"])
+        self.height = 0.95 * cm
+
+    def wrap(self, available_width, available_height):
+        self.width = available_width
+        return available_width, self.height
+
+    def draw(self):
+        self.canv.setFillColor(colors.HexColor("#232323"))
+        self.canv.setFont(self.font, self.font_size)
+        self.canv.drawCentredString(self.width / 2, 0.16 * cm, self.name)
+
+
+def typed_signature_flowable(name: str, style: str):
+    return TypedSignature(name, style)
+
+
+def signature_preview_class(style: str) -> str:
+    if style.startswith(("01", "02", "03", "04", "05")):
+        return "cursive"
+    if style.startswith("06"):
+        return "elegant"
+    if style.startswith(("07", "08", "09", "10")):
+        return "classic"
+    if style.startswith(("11", "12", "13", "14", "15")):
+        return "executive"
+    return "mono"
 
 
 def build_pdf(data: dict) -> bytes:
@@ -539,6 +613,7 @@ def build_standard_pacification_decision(
     legal_name: str,
     legal_id: str,
     signature: bytes | None,
+    signature_style: str,
     manual_override: bool,
 ) -> bytes:
     buffer = BytesIO()
@@ -605,9 +680,8 @@ def build_standard_pacification_decision(
         Spacer(1, 22),
         Paragraph(formal_date(), ParagraphStyle("StandardDate", parent=body, alignment=TA_RIGHT, firstLineIndent=0, spaceAfter=8)),
     ]
-    signature_image = signature_flowable(signature)
-    if signature_image:
-        story += [signature_image, Spacer(1, 3)]
+    signature_mark = signature_flowable(signature) or typed_signature_flowable(legal_name, signature_style)
+    story += [signature_mark, Spacer(1, 3)]
     story += [
         HRFlowable(width=5.7 * cm, thickness=0.7, color=colors.HexColor("#222222"), hAlign="CENTER", spaceBefore=2, spaceAfter=8),
         Paragraph(escape(legal_name or "Jurídico responsável").upper(), signature_text),
@@ -690,10 +764,11 @@ def build_pacification_decision(
     legal_name: str,
     legal_id: str,
     signature: bytes | None,
+    signature_style: str,
     manual_override: bool,
 ) -> bytes:
     return build_standard_pacification_decision(
-        case_number, applicant, area, findings, decision, legal_name, legal_id, signature, manual_override
+        case_number, applicant, area, findings, decision, legal_name, legal_id, signature, signature_style, manual_override
     )
 
     approved = decision == "Deferir"
@@ -748,7 +823,16 @@ def render_pacification_page():
     legal_name, legal_id = st.columns(2)
     legal_name_value = legal_name.text_input("Nome do jurídico responsável *", key="pacification_legal_name")
     legal_id_value = legal_id.text_input("ID do jurídico responsável", key="pacification_legal_id")
-    legal_signature = st.file_uploader("Assinatura do jurídico (opcional)", type=["png", "jpg", "jpeg"], key="pacification_signature", help="A assinatura será inserida acima do nome no fim da decisão.")
+    st.markdown("<div class='signature-studio'><p class='signature-studio-title'>Assinatura do documento</p><p class='signature-studio-copy'>Escolha uma assinatura digitada ou use uma imagem da assinatura real.</p></div>", unsafe_allow_html=True)
+    signature_mode = st.segmented_control("Modo", ["Digitada", "Imagem"], default="Digitada", key="pacification_signature_mode")
+    signature_style = st.selectbox("Estilo da assinatura", ["01 - Caligrafia leve", "02 - Cursiva", "03 - Cursiva marcante", "04 - Cursiva discreta", "05 - Cursiva ampla", "06 - Elegante", "07 - Clássica", "08 - Tradicional", "09 - Chancela", "10 - Serifada forte", "11 - Formal", "12 - Executiva", "13 - Moderna", "14 - Moderna forte", "15 - Minimalista", "16 - Manuscrita", "17 - Monoespaçada", "18 - Carta pessoal", "19 - Profissional", "20 - Institucional"], key="pacification_signature_style", disabled=signature_mode != "Digitada")
+    legal_signature = None
+    if signature_mode == "Imagem":
+        legal_signature = st.file_uploader("Imagem da assinatura", type=["png", "jpg", "jpeg"], key="pacification_signature", help="A imagem será inserida acima do nome no fim da decisão.")
+    else:
+        preview_name = escape(legal_name_value.strip() or "Nome do jurídico")
+        preview_class = signature_preview_class(signature_style)
+        st.markdown(f"<div class='signature-preview {preview_class}'><span class='signature-preview-name'>{preview_name}</span><span class='signature-preview-meta'>{escape(signature_style)}</span></div>", unsafe_allow_html=True)
     if uploaded_document and st.button("Analisar representação", type="primary", use_container_width=True):
         try:
             findings, source = review_pacification_pdf(uploaded_document.getvalue())
@@ -808,6 +892,7 @@ def render_pacification_page():
                 legal_name_value,
                 legal_id_value,
                 signature,
+                signature_style,
                 proceed and not approved,
             )
             outcome = "deferida" if final_decision == "Deferir" else "indeferida"
