@@ -445,14 +445,20 @@ def repair_wrapped_urls(text: str) -> str:
     """Recompose URL tokens split by a PDF line wrap without joining normal prose."""
     repaired_lines: list[str] = []
     for line in text.splitlines():
-        candidate = line.strip()
+        candidate = line.lstrip()
         previous = repaired_lines[-1] if repaired_lines else ""
-        url_match = URL_PATTERN.search(previous)
-        continuation = re.fullmatch(r"[A-Za-z0-9_~%=&?/#.+-]{8,}", candidate or "")
-        if url_match and continuation and not re.search(r"[.);,:]$", previous):
-            repaired_lines[-1] = previous.rstrip() + candidate
-        else:
-            repaired_lines.append(line)
+        url_matches = list(URL_PATTERN.finditer(previous))
+        last_url = url_matches[-1] if url_matches else None
+        continuation = re.match(r"[A-Za-z0-9_~%=&?/#.+-]+", candidate)
+        if last_url and continuation:
+            url_tail = previous[last_url.start():].rstrip()
+            next_part = continuation.group(0)
+            split_at_url_boundary = url_tail.endswith(("-", "_", "=", "/", "?", "&"))
+            recognizable_continuation = next_part.startswith(("clips/", "MSx", "Sx", "edit", "watch", "v="))
+            if split_at_url_boundary or recognizable_continuation:
+                repaired_lines[-1] = previous.rstrip() + next_part + candidate[len(next_part):]
+                continue
+        repaired_lines.append(line)
     return "\n".join(repaired_lines)
 
 
@@ -483,8 +489,8 @@ def review_pacification_pdf(pdf_bytes: bytes) -> tuple[list[dict], str]:
     for title, groups, guidance in PACIFICATION_REQUIREMENTS:
         matched = all(any_words_match(source, group) for group in groups)
         requires_link = title not in {"Investigadores identificados", "Departamento policial"}
-        if requires_link and not urls:
-            suggested_status = "Não verificado" if has_link_reference else "Não comprovado"
+        if requires_link and has_link_reference and (not urls or not matched):
+            suggested_status = "Não verificado"
         elif matched:
             suggested_status = "Comprovado"
         else:
