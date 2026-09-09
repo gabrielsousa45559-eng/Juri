@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 import re
 import unicodedata
+from urllib.parse import urlparse
 
 import streamlit as st
 from reportlab.lib import colors
@@ -110,6 +111,19 @@ def brl(value: float) -> str:
 def escape(text: Any) -> str:
     return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+
+def preserve_proof_url(value: str) -> str:
+    """Keep the original URL case; YouTube video IDs are case-sensitive."""
+    url = value.strip().strip("[]<>")
+    if url and not re.match(r"^https?://", url, flags=re.IGNORECASE):
+        url = "https://" + url
+    return url
+
+
+def is_valid_proof_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
 def calculate(crimes: list[dict], defendants: list[dict]) -> tuple[list[dict], float, float, list[float], str]:
     occurrences: dict[int, int] = {}
     lines = []
@@ -184,6 +198,8 @@ def build_legacy_pdf(data: dict) -> bytes:
 
 MODEL_REFERENCE = Path(__file__).parent / "work" / "magistratura_crest_reference.png"
 JUDICIARY_CREST = Path(__file__).parent / "assets" / "poder_judiciario_brasao.png"
+PROSECUTOR_CREST = Path(__file__).parent / "assets" / "ministerio_publico_brasao.png"
+PROSECUTOR_WATERMARK = Path(__file__).parent / "assets" / "ministerio_publico_marca_dagua.png"
 SIGNATURE_FONTS = {
     "Allura": Path(__file__).parent / "assets" / "Allura-Regular.ttf",
     "GreatVibes": Path(__file__).parent / "assets" / "GreatVibes-Regular.ttf",
@@ -200,55 +216,34 @@ for font_name, font_path in SIGNATURE_FONTS.items():
 
 
 def draw_document_page(canvas, doc):
-    """Draw the fixed judicial-paper frame used on every PDF page."""
+    """Draw the Ministério Público sheet used by every complaint page."""
     page_width, page_height = A4
     canvas.saveState()
-    wine = colors.HexColor("#762824")
-    gold = colors.HexColor("#bd9448")
-
-    canvas.setFillColor(wine)
-    canvas.rect(1.35 * cm, 0.5 * cm, 0.85 * cm, page_height - 1.0 * cm, stroke=0, fill=1)
-    canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica", 7)
-    canvas.drawCentredString(1.775 * cm, 0.72 * cm, f"P.G. {doc.page}")
-
-    if MODEL_REFERENCE.exists():
-        image = ImageReader(str(MODEL_REFERENCE))
-        image_width, image_height = image.getSize()
-        crop_left, crop_top, crop_width, crop_height = 278, 26, 92, 96
-        crest_width, crest_height = 1.65 * cm, 1.70 * cm
-        scale = min(crest_width / crop_width, crest_height / crop_height)
-        left = (page_width - crest_width) / 2
-        bottom = page_height - 2.95 * cm
-        crop_bottom = image_height - crop_top - crop_height
+    wine = colors.HexColor("#7b2925")
+    gold = colors.HexColor("#c69b47")
+    crest_path = PROSECUTOR_CREST if PROSECUTOR_CREST.exists() else (JUDICIARY_CREST if JUDICIARY_CREST.exists() else None)
+    if crest_path:
+        canvas.drawImage(str(crest_path), page_width / 2 - 0.82 * cm, page_height - 2.5 * cm, width=1.64 * cm, height=1.64 * cm, mask="auto")
         canvas.saveState()
-        path = canvas.beginPath()
-        path.rect(left, bottom, crest_width, crest_height)
-        canvas.clipPath(path, stroke=0, fill=0)
-        canvas.drawImage(
-            image,
-            left - crop_left * scale,
-            bottom - crop_bottom * scale,
-            width=image_width * scale,
-            height=image_height * scale,
-            mask="auto",
-        )
+        watermark_path = PROSECUTOR_WATERMARK if PROSECUTOR_WATERMARK.exists() else crest_path
+        canvas.setFillAlpha(0.12)
+        canvas.drawImage(str(watermark_path), page_width / 2 - 4.55 * cm, page_height / 2 - 4.55 * cm, width=9.1 * cm, height=9.1 * cm, mask="auto")
         canvas.restoreState()
     else:
         canvas.setStrokeColor(gold)
         canvas.setLineWidth(1)
-        canvas.circle(page_width / 2, page_height - 2.10 * cm, 0.61 * cm, stroke=1, fill=0)
+        canvas.circle(page_width / 2, page_height - 1.7 * cm, 0.65 * cm, stroke=1, fill=0)
 
-    canvas.setFillColor(colors.HexColor("#1b1b1b"))
-    canvas.setFont("Helvetica-Bold", 10)
-    canvas.drawCentredString(page_width / 2, page_height - 4.18 * cm, "MINISTÉRIO PÚBLICO - CIDADE ALTA RIO DE JANEIRO")
-    line_y = page_height - 4.53 * cm
-    canvas.setStrokeColor(colors.HexColor("#8b8b8b"))
-    canvas.setLineWidth(3.5)
-    canvas.line(2.95 * cm, line_y + 2.1, page_width - 2.0 * cm, line_y + 2.1)
+    canvas.setFillColor(colors.HexColor("#101010"))
+    canvas.setFont("Helvetica-Bold", 8.5)
+    canvas.drawCentredString(page_width / 2, page_height - 3.0 * cm, "MINISTÉRIO PÚBLICO - CIDADE ALTA RIO DE JANEIRO")
     canvas.setStrokeColor(colors.black)
-    canvas.setLineWidth(2.2)
-    canvas.line(2.95 * cm, line_y - 1.4, page_width - 2.0 * cm, line_y - 1.4)
+    canvas.setLineWidth(1.15)
+    canvas.line(2.2 * cm, page_height - 3.35 * cm, page_width - 2.2 * cm, page_height - 3.35 * cm)
+    canvas.setFillColor(colors.HexColor("#151515"))
+    canvas.setFont("Helvetica-Oblique", 5.5)
+    canvas.drawCentredString(page_width / 2, 1.05 * cm, "Juro, no exercício das funções de guardião do interesse público, promover o cumprimento da legislação, fazendo da justiça o meio de combater a")
+    canvas.drawCentredString(page_width / 2, 0.82 * cm, "violência e de socorrer os que dela precisarem, buscando restabelecer a justiça sempre que necessário.")
     canvas.restoreState()
 
 
@@ -328,30 +323,35 @@ def build_pdf(data: dict) -> bytes:
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        leftMargin=3.18 * cm,
-        rightMargin=2.0 * cm,
-        topMargin=6.0 * cm,
-        bottomMargin=1.65 * cm,
+        leftMargin=1.8 * cm,
+        rightMargin=1.8 * cm,
+        topMargin=4.25 * cm,
+        bottomMargin=1.55 * cm,
         title="Denúncia - Magistratura",
     )
     base = getSampleStyleSheet()
     body = ParagraphStyle(
-        "JudicialBody", parent=base["Normal"], fontName="Helvetica", fontSize=9.2,
-        leading=13.2, alignment=TA_JUSTIFY, spaceAfter=9,
+        "JudicialBody", parent=base["Normal"], fontName="Times-Roman", fontSize=9.5,
+        leading=13.8, alignment=TA_JUSTIFY, spaceAfter=9,
     )
-    body_bold = ParagraphStyle("JudicialBold", parent=body, fontName="Helvetica-Bold", alignment=TA_LEFT, spaceAfter=5)
+    body_bold = ParagraphStyle("JudicialBold", parent=body, fontName="Times-Bold", alignment=TA_LEFT, spaceAfter=5)
     section = ParagraphStyle(
-        "JudicialSection", parent=body, fontName="Helvetica-Bold", fontSize=11,
+        "JudicialSection", parent=body, fontName="Times-Bold", fontSize=10.5,
         leading=14, alignment=TA_LEFT, spaceBefore=13, spaceAfter=13,
     )
     title = ParagraphStyle(
-        "JudicialTitle", parent=body, fontName="Helvetica-Bold", fontSize=12,
-        leading=15, alignment=TA_CENTER, spaceBefore=14, spaceAfter=18,
+        "JudicialTitle", parent=body, fontName="Times-Bold", fontSize=10,
+        leading=13, alignment=TA_CENTER, spaceBefore=4, spaceAfter=16,
     )
     centered = ParagraphStyle("JudicialCenter", parent=body, alignment=TA_CENTER, spaceAfter=4)
     small = ParagraphStyle("JudicialSmall", parent=body, fontSize=8.8, leading=12, spaceAfter=5)
+    link_style = ParagraphStyle("JudicialLink", parent=small, textColor=colors.HexColor("#0758c8"), fontName="Times-Bold")
 
-    story = [Paragraph(f"<b>Processo n°: {escape(data['process'])}</b>", body_bold), Paragraph("<b>RÉUS:</b>", body_bold)]
+    story = [
+        Paragraph("EXCELENTÍSSIMO JUIZ DA VARA CRIMINAL DA CIRCUNSCRIÇÃO JUDICIÁRIA DA CIDADE ALTA", title),
+        Paragraph(f"<b>Processo N.º: {escape(data['process'])}</b>", body_bold),
+        Paragraph("<b>Réu(s):</b>", body_bold),
+    ]
     story += [Paragraph(f"• &nbsp; <b>{escape(d['name'])}</b> - ID: {escape(d['id'])}", body, bulletText="") for d in data["defendants"]]
     story.append(Paragraph("<b>VÍTIMA:</b>", body_bold))
     story += [Paragraph(f"• &nbsp; <b>{escape(v['name'])}</b> - ID: {escape(v['id'])}", body, bulletText="") for v in data["victims"]]
@@ -362,7 +362,7 @@ def build_pdf(data: dict) -> bytes:
         "com base nas provas carreadas e na narrativa fática a seguir exposta, vem perante o Juízo competente "
         "oferecer a presente denúncia em face dos réus acima qualificados, pelas condutas tipificadas no Código Penal, conforme se demonstra."
     )
-    story += [Paragraph("Introdução do Ministério Público", title), Paragraph(intro, body), Paragraph("I - DOS FATOS", section)]
+    story += [Paragraph(intro, body), Paragraph("I - DOS FATOS", section)]
     for fact in (part.strip() for part in data["facts"].split("\n\n")):
         if fact:
             story.append(Paragraph(escape(fact).replace("\n", "<br/>"), body))
@@ -377,9 +377,18 @@ def build_pdf(data: dict) -> bytes:
         ]))
 
     story += [
-        Paragraph("III - DA INDENIZAÇÃO", section),
-        Paragraph(f"Soma calculada: {brl(data['gross'])}.", body),
-        Paragraph(f"<b>Indenização total devida: {brl(data['total'])}.</b> {escape(data['note'])}", body),
+        Paragraph("III - DO DIREITO E DO DANO MORAL", section),
+        Paragraph(
+            "A narrativa apresentada aponta, em tese, violação aos direitos envolvidos e deve ser "
+            "apreciada à luz das provas audiovisuais e dos demais elementos constantes dos autos.",
+            body,
+        ),
+        Paragraph(
+            "Caso os fatos sejam confirmados, os responsáveis deverão responder pelas condutas "
+            "praticadas, sem prejuízo da reparação civil cabível à vítima.",
+            body,
+        ),
+        Paragraph(f"<b>Indenização total requerida: {brl(data['total'])}.</b> {escape(data['note'])}", body),
         Paragraph("IV - DOS PEDIDOS E REQUERIMENTOS", section),
     ]
     requests = [
@@ -390,31 +399,39 @@ def build_pdf(data: dict) -> bytes:
     ]
     requests.extend(request for request in data.get("prosecutor_requests", []) if request.strip())
     story.append(ListFlowable([ListItem(Paragraph(escape(item), body)) for item in requests], bulletType="bullet", leftIndent=16))
-    story += [Spacer(1, 13), Paragraph("Nestes termos, pede deferimento.", body_bold), Spacer(1, 12), Paragraph(f"Cidade Alta, {escape(data['date'])}.", body_bold), Spacer(1, 28)]
+    story += [Spacer(1, 15), Paragraph("V - DAS PROVAS UTILIZADAS PARA EMBASAMENTO DA ACUSAÇÃO", section)]
+    if data["proofs"]:
+        for index, proof in enumerate(data["proofs"], 1):
+            if isinstance(proof, dict):
+                title_text = escape(proof.get("title") or f"Prova audiovisual ({index:02d})")
+                url = preserve_proof_url(proof.get("url") or "")
+                story.append(Paragraph(f"<b>Prova Audiovisual ({index:02d})</b> - {title_text}", body_bold))
+                if url and is_valid_proof_url(url):
+                    story.append(Paragraph(f"LINK: <link href=\"{escape(url)}\"><u>{escape(url)}</u></link>", link_style))
+                elif url:
+                    story.append(Paragraph(f"LINK INFORMADO: {escape(url)}", small))
+            else:
+                story.append(Paragraph(f"<b>Prova Audiovisual ({index:02d})</b> - {escape(proof)}", small))
+    else:
+        story.append(Paragraph("Nenhuma prova audiovisual foi anexada.", small))
+
+    # A assinatura fica isolada na última folha, após a relação de provas.
+    story += [PageBreak(), Spacer(1, 1.05 * cm)]
     signature = signature_flowable(data.get("signature"))
     if signature:
-        story += [signature, Spacer(1, 4)]
+        story += [signature, Spacer(1, 0.25 * cm)]
     story += [
         Paragraph(f"<i>{escape(data['prosecutor'])}</i>", centered),
         Paragraph(escape(data['prosecutor_id']), centered),
         Paragraph("Promotor de Justiça", centered),
-        Spacer(1, 15),
-        Paragraph("Anexo I", centered),
-        Paragraph("Provas Audiovisuais:", centered),
-        Spacer(1, 9),
     ]
-    if data["proofs"]:
-        for index, proof in enumerate(data["proofs"], 1):
-            story.append(Paragraph(f"• &nbsp; Prova {index}:<br/>&nbsp;&nbsp;&nbsp;{escape(proof)}", small))
-    else:
-        story.append(Paragraph("Nenhuma prova audiovisual informada.", small))
 
     doc.build(story, onFirstPage=draw_document_page, onLaterPages=draw_document_page)
     return buffer.getvalue()
 
 
 def init_state():
-    for key, default in {"defendant_count": 1, "victim_count": 1}.items():
+    for key, default in {"defendant_count": 1, "victim_count": 1, "proof_count": 1}.items():
         if key not in st.session_state:
             st.session_state[key] = default
 
@@ -986,6 +1003,16 @@ with st.form("complaint_form"):
         )
         selected_crimes.append({**crime, "description": description})
 
+    st.subheader("Provas a serem anexadas")
+    st.caption("Cole cada link exatamente como foi recebido. O sistema preserva maiúsculas e minúsculas, inclusive nos IDs do YouTube.")
+    proof_entries = []
+    for i in range(st.session_state.proof_count):
+        proof_columns = st.columns([2, 5])
+        proof_entries.append({
+            "title": proof_columns[0].text_input("Identificação da prova", key=f"proof_title_{i}", placeholder=f"Prova audiovisual ({i + 1:02d})"),
+            "url": proof_columns[1].text_input("Link da prova", key=f"proof_url_{i}", placeholder="https://youtu.be/AbCdEf12345"),
+        })
+
     st.subheader("Vídeo e resumo dos fatos")
     uploaded_video = st.file_uploader(
         "Carregar vídeo do computador (opcional)",
@@ -995,7 +1022,6 @@ with st.form("complaint_form"):
     if uploaded_video:
         st.video(uploaded_video)
         st.caption(f"Vídeo selecionado: {uploaded_video.name}")
-    proof_text = st.text_area("Links de outros vídeos/provas (um por linha)", height=100)
     uploaded_signature = st.file_uploader(
         "Assinatura do promotor (opcional)",
         type=["png", "jpg", "jpeg"],
@@ -1006,11 +1032,13 @@ with st.form("complaint_form"):
     prosecutor_request_2 = st.text_area("Pedido adicional 2 (opcional)", height=80)
     submitted = st.form_submit_button("Gerar Denúncia PDF", type="primary", use_container_width=True)
 
-controls = st.columns(2)
+controls = st.columns(3)
 if controls[0].button("+ Adicionar réu"):
     st.session_state.defendant_count += 1; st.rerun()
 if controls[1].button("+ Adicionar vítima"):
     st.session_state.victim_count += 1; st.rerun()
+if controls[2].button("+ Adicionar prova"):
+    st.session_state.proof_count += 1; st.rerun()
 if submitted:
     assets_normalized = [{**d, "assets": d["assets"] if d["assets"] > 0 else None} for d in defendants]
     required = [process, prosecutor_name, prosecutor_identification, facts]
@@ -1020,9 +1048,21 @@ if submitted:
         st.error("Preencha todos os campos obrigatórios, inclusive a descrição de cada crime.")
     else:
         lines, gross, total, shares, note = calculate(selected_crimes, assets_normalized)
-        proofs = [p.strip() for p in proof_text.splitlines() if p.strip()]
+        proofs = []
+        invalid_proof_urls = []
+        for index, proof in enumerate(proof_entries, 1):
+            url = preserve_proof_url(proof["url"])
+            if not url:
+                continue
+            if not is_valid_proof_url(url):
+                invalid_proof_urls.append(str(index))
+                continue
+            proofs.append({"title": proof["title"].strip() or f"Prova audiovisual ({index:02d})", "url": url})
+        if invalid_proof_urls:
+            st.error("Revise o link da(s) prova(s): " + ", ".join(invalid_proof_urls) + ". Use um endereço começando com https://.")
+            st.stop()
         if uploaded_video:
-            proofs.insert(0, f"Vídeo local selecionado: {uploaded_video.name}")
+            proofs.insert(0, {"title": f"Vídeo local selecionado: {uploaded_video.name}", "url": ""})
         signature = uploaded_signature.getvalue() if uploaded_signature else None
         pdf = build_pdf({"process": process, "prosecutor": prosecutor_name, "prosecutor_id": prosecutor_identification, "date": complaint_date.strftime("%d/%m/%Y"), "defendants": assets_normalized, "victims": victims, "facts": facts, "lines": lines, "gross": gross, "total": total, "note": note, "proofs": proofs, "signature": signature, "prosecutor_requests": [prosecutor_request_1, prosecutor_request_2]})
         st.success(f"PDF gerado. Indenização total: {brl(total)}")
