@@ -331,61 +331,75 @@ def build_pdf(data: dict) -> bytes:
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        leftMargin=1.8 * cm,
-        rightMargin=1.8 * cm,
-        topMargin=4.25 * cm,
-        bottomMargin=1.55 * cm,
+        leftMargin=2.45 * cm,
+        rightMargin=2.45 * cm,
+        topMargin=5.05 * cm,
+        bottomMargin=2.15 * cm,
         title="Denúncia - Magistratura",
     )
     base = getSampleStyleSheet()
     body = ParagraphStyle(
-        "JudicialBody", parent=base["Normal"], fontName="Times-Roman", fontSize=9.5,
-        leading=13.8, alignment=TA_JUSTIFY, spaceAfter=9,
+        "ProcessBody", parent=base["Normal"], fontName="Times-Roman", fontSize=10.3,
+        leading=15.2, alignment=TA_JUSTIFY, firstLineIndent=0.55 * cm, spaceAfter=10,
     )
-    body_bold = ParagraphStyle("JudicialBold", parent=body, fontName="Times-Bold", alignment=TA_LEFT, spaceAfter=5)
+    body_bold = ParagraphStyle("ProcessBold", parent=body, fontName="Times-Bold", alignment=TA_LEFT, firstLineIndent=0, spaceAfter=5)
     section = ParagraphStyle(
-        "JudicialSection", parent=body, fontName="Times-Bold", fontSize=10.5,
-        leading=14, alignment=TA_LEFT, spaceBefore=13, spaceAfter=13,
+        "ProcessSection", parent=body, fontName="Times-Bold", fontSize=10.8,
+        leading=14, textColor=STANDARD_BLUE, firstLineIndent=0, spaceBefore=12, spaceAfter=7,
     )
-    title = ParagraphStyle(
-        "JudicialTitle", parent=body, fontName="Times-Bold", fontSize=10,
-        leading=13, alignment=TA_CENTER, spaceBefore=4, spaceAfter=16,
-    )
-    centered = ParagraphStyle("JudicialCenter", parent=body, alignment=TA_CENTER, spaceAfter=4)
-    small = ParagraphStyle("JudicialSmall", parent=body, fontSize=8.8, leading=12, spaceAfter=5)
-    link_style = ParagraphStyle("JudicialLink", parent=small, textColor=colors.HexColor("#0758c8"), fontName="Times-Bold")
+    table_label = ParagraphStyle("ProcessTableLabel", parent=body, fontName="Times-Bold", fontSize=9.5, leading=12, textColor=STANDARD_BLUE, firstLineIndent=0)
+    table_value = ParagraphStyle("ProcessTableValue", parent=body, fontName="Times-Roman", fontSize=9.5, leading=12, firstLineIndent=0)
+    centered = ParagraphStyle("ProcessCenter", parent=body, alignment=TA_CENTER, firstLineIndent=0, spaceAfter=4)
+    small = ParagraphStyle("ProcessSmall", parent=body, fontSize=9, leading=12.5, firstLineIndent=0, spaceAfter=5)
+    link_style = ParagraphStyle("ProcessLink", parent=small, textColor=colors.HexColor("#0758c8"), fontName="Times-Bold")
+    signature_text = ParagraphStyle("ProcessSignature", parent=body, fontName="Times-Bold", fontSize=10.2, leading=13, alignment=TA_CENTER, textColor=STANDARD_BLUE, firstLineIndent=0)
+
+    accused = "; ".join(f"{d['name']} (ID {d['id']})" for d in data["defendants"]) or "Não informado"
+    metadata = [
+        [Paragraph("PROCESSO Nº:", table_label), Paragraph(escape(data["process"] or "Não informado"), table_value)],
+        [Paragraph("DENUNCIANTE:", table_label), Paragraph(f"Ministério Público - Promotor {escape(data['prosecutor'] or 'Não informado')} (ID {escape(data['prosecutor_id'] or 'Não informado')})", table_value)],
+        [Paragraph("RÉUS:", table_label), Paragraph(escape(accused), table_value)],
+        [Paragraph("ASSUNTO:", table_label), Paragraph("Denúncia criminal, reparação civil e requerimentos", table_value)],
+    ]
+    metadata_table = Table(metadata, colWidths=[3.7 * cm, 11.65 * cm])
+    metadata_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5f8fc")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#b9c8da")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
 
     story = [
-        Paragraph("EXCELENTÍSSIMO JUIZ DA VARA CRIMINAL DA CIRCUNSCRIÇÃO JUDICIÁRIA DA CIDADE ALTA", title),
-        Paragraph(f"<b>Processo N.º: {escape(data['process'])}</b>", body_bold),
-        Paragraph("<b>Réu(s):</b>", body_bold),
+        metadata_table,
+        Paragraph("1. RELATÓRIO", section),
+        HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9),
+        Paragraph("Vistos.", body),
     ]
-    story += [Paragraph(f"• &nbsp; <b>{escape(d['name'])}</b> - ID: {escape(d['id'])}", body, bulletText="") for d in data["defendants"]]
-    story.append(Paragraph("<b>VÍTIMA:</b>", body_bold))
-    story += [Paragraph(f"• &nbsp; <b>{escape(v['name'])}</b> - ID: {escape(v['id'])}", body, bulletText="") for v in data["victims"]]
-
     intro = (
-        f"O Ministério Público, por meio de seu Promotor de Justiça {escape(data['prosecutor'])} | "
-        f"{escape(data['prosecutor_id'])}, no exercício de suas atribuições constitucionais, "
-        "com base nas provas carreadas e na narrativa fática a seguir exposta, vem perante o Juízo competente "
-        "oferecer a presente denúncia em face dos réus acima qualificados, pelas condutas tipificadas no Código Penal, conforme se demonstra."
+        f"Trata-se de denúncia apresentada pelo Ministério Público, por intermédio do Promotor de Justiça "
+        f"{escape(data['prosecutor'])} (ID {escape(data['prosecutor_id'])}), em face dos investigados acima qualificados, "
+        "com fundamento na narrativa fática e nos elementos probatórios relacionados aos autos."
     )
-    story += [Paragraph(intro, body), Paragraph("I - DOS FATOS", section)]
+    story += [Paragraph(intro, body), Paragraph("2. DOS FATOS", section), HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9)]
     for fact in (part.strip() for part in data["facts"].split("\n\n")):
         if fact:
             story.append(Paragraph(escape(fact).replace("\n", "<br/>"), body))
 
-    story.append(Paragraph("II - DOS CRIMES", section))
+    story += [Paragraph("3. DOS CRIMES", section), HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9)]
     for line in data["lines"]:
         factor = "100%" if line["factor"] == 1 else "20%"
         description = escape(line.get("description") or "")
         story.append(KeepTogether([
             Paragraph(f"<b>Art. {line['article']} - {escape(line['name'])}</b>", body_bold),
-            Paragraph(f"Nível {line['level']} - {line['label']} | {brl(line['applied'])} ({factor}). {description}", body),
+            Paragraph(f"Nível {line['level']} - {line['label']} | Valor aplicado: {brl(line['applied'])} ({factor}). {description}", body),
         ]))
 
     story += [
-        Paragraph("III - DO DIREITO E DO DANO MORAL", section),
+        Paragraph("4. DO DIREITO E DO DANO MORAL", section),
+        HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9),
         Paragraph(
             "A narrativa apresentada aponta, em tese, violação aos direitos envolvidos e deve ser "
             "apreciada à luz das provas audiovisuais e dos demais elementos constantes dos autos.",
@@ -396,18 +410,36 @@ def build_pdf(data: dict) -> bytes:
             "praticadas, sem prejuízo da reparação civil cabível à vítima.",
             body,
         ),
-        Paragraph(f"<b>Indenização total requerida: {brl(data['total'])}.</b> {escape(data['note'])}", body),
-        Paragraph("IV - DOS PEDIDOS E REQUERIMENTOS", section),
+        Paragraph("5. DO CÁLCULO E DA DISTRIBUIÇÃO", section),
+        HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9),
+        Paragraph(f"Valor bruto apurado: <b>{brl(data['gross'])}</b>. Valor final da indenização: <b>{brl(data['total'])}</b>. {escape(data['note'])}", body),
     ]
+    calculation_rows = [
+        [Paragraph("DESTINAÇÃO", table_label), Paragraph("PERCENTUAL", table_label), Paragraph("VALOR", table_label)],
+        [Paragraph("Cliente / vítima", table_value), Paragraph("75%", table_value), Paragraph(brl(data["total"] * .75), table_value)],
+        [Paragraph("Promotoria", table_value), Paragraph("15%", table_value), Paragraph(brl(data["total"] * .15), table_value)],
+        [Paragraph("Magistratura", table_value), Paragraph("10%", table_value), Paragraph(brl(data["total"] * .10), table_value)],
+    ]
+    calculation_table = Table(calculation_rows, colWidths=[7.3 * cm, 3.4 * cm, 4.65 * cm], repeatRows=1)
+    calculation_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8eef6")),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#b9c8da")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story += [calculation_table, Spacer(1, 10), Paragraph("6. DOS PEDIDOS E REQUERIMENTOS", section), HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9)]
     requests = [
         "O recebimento da presente denúncia e o regular prosseguimento do feito.",
         "A citação dos réus para responderem aos termos da denúncia.",
         "A produção das provas admitidas em direito, incluindo as relacionadas no Anexo I.",
-        f"A fixação da indenização no valor total de {brl(data['total'])}.",
+        f"A fixação da indenização no valor total de {brl(data['total'])}, conforme a distribuição indicada no cálculo.",
     ]
     requests.extend(request for request in data.get("prosecutor_requests", []) if request.strip())
     story.append(ListFlowable([ListItem(Paragraph(escape(item), body)) for item in requests], bulletType="bullet", leftIndent=16))
-    story += [Spacer(1, 15), Paragraph("V - DAS PROVAS UTILIZADAS PARA EMBASAMENTO DA ACUSAÇÃO", section)]
+    story += [Spacer(1, 12), Paragraph("7. DAS PROVAS UTILIZADAS PARA EMBASAMENTO DA ACUSAÇÃO", section), HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d8e1ec"), spaceAfter=9)]
     if data["proofs"]:
         for index, proof in enumerate(data["proofs"], 1):
             if isinstance(proof, dict):
@@ -423,20 +455,22 @@ def build_pdf(data: dict) -> bytes:
     else:
         story.append(Paragraph("Nenhuma prova audiovisual foi anexada.", small))
 
-    # A assinatura fica isolada na última folha, após a relação de provas.
-    story += [PageBreak(), Spacer(1, 1.05 * cm)]
     signature = signature_flowable(data.get("signature")) or typed_signature_flowable(
         data.get("prosecutor", ""), data.get("signature_style", "21 - Judicial clássica")
     )
-    if signature:
-        story += [signature, Spacer(1, 0.25 * cm)]
-    story += [
-        Paragraph(f"<i>{escape(data['prosecutor'])}</i>", centered),
-        Paragraph(escape(data['prosecutor_id']), centered),
-        Paragraph("Promotor de Justiça", centered),
+    closing = [
+        Spacer(1, 16),
+        Paragraph(formal_date(), ParagraphStyle("ProcessDate", parent=body, alignment=TA_RIGHT, firstLineIndent=0, spaceAfter=8)),
+        signature,
+        Spacer(1, 3),
+        HRFlowable(width=5.7 * cm, thickness=0.7, color=colors.HexColor("#222222"), hAlign="CENTER", spaceBefore=2, spaceAfter=8),
+        Paragraph(escape(data['prosecutor'] or "Promotor responsável").upper(), signature_text),
+        Paragraph(f"Promotor de Justiça - ID: {escape(data['prosecutor_id'] or 'Não informado')}", ParagraphStyle("ProcessRole", parent=signature_text, fontName="Times-Roman", fontSize=9.5, textColor=STANDARD_BLUE)),
+        Paragraph("Comarca de Cidade Alta - RJ", ParagraphStyle("ProcessCourt", parent=signature_text, fontName="Times-Roman", fontSize=9.5, textColor=STANDARD_BLUE)),
     ]
+    story.append(KeepTogether(closing))
 
-    doc.build(story, onFirstPage=draw_document_page, onLaterPages=draw_document_page)
+    doc.build(story, onFirstPage=draw_standard_decision_page, onLaterPages=draw_standard_decision_page, canvasmaker=StandardDecisionCanvas)
     return buffer.getvalue()
 
 
