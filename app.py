@@ -1190,10 +1190,308 @@ def render_investigation_page():
         )
 
 
+def build_defense_pdf(data: dict[str, Any]) -> bytes:
+    """Builds a defense brief with its own structure and a restrained blue judicial identity."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=2.45 * cm,
+        rightMargin=2.45 * cm,
+        topMargin=5.05 * cm,
+        bottomMargin=2.15 * cm,
+        title=f"Defesa - Processo {data['case_number'] or 'sem número'}",
+    )
+    base = getSampleStyleSheet()
+    body = ParagraphStyle(
+        "DefenseBody", parent=base["Normal"], fontName="Times-Roman", fontSize=10.5,
+        leading=16, alignment=TA_JUSTIFY, firstLineIndent=0.55 * cm, spaceAfter=10,
+    )
+    heading = ParagraphStyle(
+        "DefenseHeading", parent=body, fontName="Times-Bold", fontSize=11,
+        leading=15, textColor=STANDARD_BLUE, firstLineIndent=0, spaceBefore=15, spaceAfter=7,
+    )
+    label = ParagraphStyle("DefenseLabel", parent=body, fontName="Times-Bold", fontSize=9.2, leading=12, textColor=STANDARD_BLUE, firstLineIndent=0)
+    value = ParagraphStyle("DefenseValue", parent=body, fontName="Times-Roman", fontSize=9.5, leading=13, firstLineIndent=0)
+    small = ParagraphStyle("DefenseSmall", parent=body, fontSize=9, leading=12, firstLineIndent=0, spaceAfter=5)
+    link_style = ParagraphStyle("DefenseLink", parent=small, textColor=colors.HexColor("#0758c8"), fontName="Times-Bold")
+    sign_style = ParagraphStyle("DefenseSignature", parent=body, fontName="Times-Bold", fontSize=10.2, leading=13, alignment=TA_CENTER, textColor=STANDARD_BLUE, firstLineIndent=0)
+
+    metadata = [
+        [Paragraph("PROCESSO Nº", label), Paragraph(escape(data["case_number"] or "Não informado"), value)],
+        [Paragraph("ACUSADO(A)", label), Paragraph(escape(data["defendant"] or "Não informado"), value)],
+        [Paragraph("DEFESA TÉCNICA", label), Paragraph(escape(data["counsel"] or "Não informado"), value)],
+        [Paragraph("PARTE AUTORA", label), Paragraph(escape(data["opposing_party"] or "Não informada"), value)],
+        [Paragraph("PEÇA", label), Paragraph(escape(data["defense_type"]), value)],
+    ]
+    metadata_table = Table(metadata, colWidths=[3.7 * cm, 11.65 * cm])
+    metadata_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eaf0f8")),
+        ("BACKGROUND", (1, 0), (1, -1), colors.HexColor("#f8fafc")),
+        ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#aebfd3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#d5dfeb")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+    def add_section(story: list, title: str, text: str):
+        story.extend([Paragraph(title, heading), HRFlowable(width="100%", thickness=0.55, color=colors.HexColor("#d2ddeb"), spaceAfter=9)])
+        paragraphs = [part.strip() for part in (text or "").split("\n\n") if part.strip()]
+        if paragraphs:
+            story.extend(Paragraph(escape(part).replace("\n", "<br/>"), body) for part in paragraphs)
+        else:
+            story.append(Paragraph("Não informado.", small))
+
+    story = [
+        metadata_table,
+        Spacer(1, 9),
+        Paragraph("RESPOSTA DEFENSIVA", ParagraphStyle("DefenseTitle", parent=heading, fontSize=15, leading=19, alignment=TA_CENTER, spaceBefore=8, spaceAfter=3)),
+        Paragraph("Síntese organizada da versão defensiva e dos requerimentos da parte", ParagraphStyle("DefenseSubtitle", parent=small, alignment=TA_CENTER, textColor=colors.HexColor("#52677f"), spaceAfter=8)),
+    ]
+    add_section(story, "01  ·  APRESENTAÇÃO", data["presentation"])
+    add_section(story, "02  ·  SÍNTESE DA IMPUTAÇÃO", data["allegation"])
+    add_section(story, "03  ·  VERSÃO DOS FATOS", data["defense_facts"])
+    add_section(story, "04  ·  PRELIMINARES E QUESTÕES PROCESSUAIS", data["preliminary"])
+    add_section(story, "05  ·  MÉRITO E FUNDAMENTOS DA DEFESA", data["merits"])
+    add_section(story, "06  ·  ELEMENTOS E PROVAS", data["evidence_notes"])
+    if data["proofs"]:
+        for index, proof in enumerate(data["proofs"], 1):
+            title_text = escape(proof["title"] or f"Documento de apoio {index:02d}")
+            story.append(Paragraph(f"<b>{index:02d}. {title_text}</b>", small))
+            url = preserve_proof_url(proof["url"])
+            if url and is_valid_proof_url(url):
+                story.append(Paragraph(f"Referência: <link href=\"{escape(url)}\"><u>{escape(url)}</u></link>", link_style))
+    add_section(story, "07  ·  PEDIDOS", data["requests"])
+    add_section(story, "08  ·  REQUERIMENTOS FINAIS", data["closing"])
+    story.extend([
+        Spacer(1, 10),
+        Paragraph(formal_date(), ParagraphStyle("DefenseDate", parent=body, alignment=TA_RIGHT, firstLineIndent=0, spaceAfter=9)),
+    ])
+    signature_mark = signature_flowable(data.get("signature")) or typed_signature_flowable(data["counsel"], data["signature_style"])
+    story.extend([
+        signature_mark, Spacer(1, 3),
+        HRFlowable(width=6.4 * cm, thickness=0.65, color=colors.HexColor("#385578"), hAlign="CENTER", spaceBefore=2, spaceAfter=7),
+        Paragraph(escape(data["counsel"] or "Defensor(a)").upper(), sign_style),
+        Paragraph(f"Defensor(a) - OAB/ID: {escape(data['counsel_id'] or 'Não informado')}", ParagraphStyle("DefenseRole", parent=sign_style, fontName="Times-Roman", fontSize=9.5)),
+    ])
+    doc.build(story, onFirstPage=draw_standard_decision_page, onLaterPages=draw_standard_decision_page, canvasmaker=StandardDecisionCanvas)
+    return buffer.getvalue()
+
+
+def render_defense_page():
+    st.markdown("<div class='mid-header'><div class='mid-brand'><div class='mid-monogram'>MN</div><div><p class='mid-kicker'>ᴍᴀɢɪsᴛʀᴀᴛᴜʀᴀ</p><div class='mid-title'>Defesas</div></div></div><p class='mid-subtitle'>Elaboração de peça defensiva</p></div>", unsafe_allow_html=True)
+    st.markdown("### Criar defesa")
+    st.caption("Preencha os dados do caso e organize a versão defensiva, os fundamentos, as provas e os pedidos. Os campos são editáveis antes de gerar o PDF.")
+    with st.form("defense_form"):
+        case_col, type_col = st.columns([2, 1])
+        case_number = case_col.text_input("Número do processo *", key="defense_case_number")
+        defense_type = type_col.selectbox("Tipo de defesa", ["Resposta à acusação", "Defesa prévia", "Memoriais defensivos", "Manifestação defensiva", "Outro"], key="defense_type")
+        if defense_type == "Outro":
+            defense_type = st.text_input("Identifique a peça", key="defense_type_custom")
+        who, opposing = st.columns(2)
+        defendant = who.text_input("Acusado(a) / defendido(a) *", key="defense_defendant")
+        opposing_party = opposing.text_input("Parte autora / acusação", key="defense_opposing_party")
+        st.subheader("Defesa técnica")
+        lawyer, lawyer_id = st.columns(2)
+        counsel = lawyer.text_input("Nome do(a) defensor(a) *", key="defense_counsel")
+        counsel_id = lawyer_id.text_input("OAB / ID", key="defense_counsel_id")
+        presentation = st.text_area("Apresentação e qualificação", key="defense_presentation", height=85, placeholder="Identifique a parte defendida e informe a finalidade desta manifestação.")
+        allegation = st.text_area("Síntese da acusação ou do pedido", key="defense_allegation", height=120, placeholder="Resuma os fatos atribuídos à parte e os pontos que serão enfrentados.")
+        defense_facts = st.text_area("Versão defensiva dos fatos *", key="defense_facts", height=150, placeholder="Registre a narrativa da defesa em ordem clara e cronológica.")
+        preliminary = st.text_area("Preliminares e questões processuais", key="defense_preliminary", height=120, placeholder="Informe nulidades, questões de admissibilidade ou outros pontos preliminares. Se não houver, deixe em branco.")
+        merits = st.text_area("Mérito e fundamentos da defesa *", key="defense_merits", height=170, placeholder="Apresente os argumentos defensivos e relacione cada ponto aos fatos e elementos disponíveis.")
+        evidence_notes = st.text_area("Provas e elementos de apoio", key="defense_evidence", height=120, placeholder="Explique o que cada documento, vídeo ou testemunho busca demonstrar.")
+        proof_title = st.text_input("Identificação de documento ou mídia (opcional)", key="defense_proof_title", placeholder="Ex.: Vídeo da câmera externa")
+        proof_url = st.text_input("Link de apoio (opcional)", key="defense_proof_url", placeholder="https://...")
+        requests = st.text_area("Pedidos da defesa *", key="defense_requests", height=145, placeholder="Escreva cada pedido em um parágrafo separado.")
+        closing = st.text_area("Requerimentos finais e observações", key="defense_closing", height=90, placeholder="Ex.: produção de provas, intimações ou outras providências pertinentes.")
+        st.markdown("<div class='signature-studio'><p class='signature-studio-title'>Assinatura da defesa</p><p class='signature-studio-copy'>Escolha uma assinatura digitada ou use uma imagem.</p></div>", unsafe_allow_html=True)
+        signature_mode = st.segmented_control("Modo da assinatura", ["Digitada", "Imagem"], default="Digitada", key="defense_signature_mode")
+        signature_style = st.selectbox("Estilo", SIGNATURE_STYLE_OPTIONS, index=20, key="defense_signature_style", disabled=signature_mode != "Digitada")
+        uploaded_signature = None
+        if signature_mode == "Imagem":
+            uploaded_signature = st.file_uploader("Imagem da assinatura", type=["png", "jpg", "jpeg"], key="defense_signature")
+        else:
+            preview_name = escape(counsel.strip() or "Nome do(a) defensor(a)")
+            st.markdown(f"<div class='signature-preview {signature_preview_class(signature_style)}'><span class='signature-preview-name'>{preview_name}</span><span class='signature-preview-meta'>{escape(signature_style)}</span></div>", unsafe_allow_html=True)
+        submitted = st.form_submit_button("Gerar PDF da defesa", type="primary", use_container_width=True)
+
+    if submitted:
+        if not all((case_number.strip(), defendant.strip(), counsel.strip(), defense_facts.strip(), merits.strip(), requests.strip())):
+            st.error("Preencha processo, pessoa defendida, defensor(a), versão dos fatos, fundamentos e pedidos.")
+            return
+        proofs = []
+        if proof_url.strip():
+            url = preserve_proof_url(proof_url)
+            if not is_valid_proof_url(url):
+                st.error("O link de apoio precisa começar com https://.")
+                return
+            proofs.append({"title": proof_title.strip(), "url": url})
+        pdf = build_defense_pdf({
+            "case_number": case_number.strip(), "defendant": defendant.strip(), "counsel": counsel.strip(),
+            "counsel_id": counsel_id.strip(), "opposing_party": opposing_party.strip(), "defense_type": defense_type,
+            "presentation": presentation, "allegation": allegation, "defense_facts": defense_facts,
+            "preliminary": preliminary, "merits": merits, "evidence_notes": evidence_notes,
+            "proofs": proofs, "requests": requests, "closing": closing,
+            "signature": uploaded_signature.getvalue() if uploaded_signature else None, "signature_style": signature_style,
+        })
+        output_dir = Path("output/pdf")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = output_dir / f"previa_defesa_{re.sub(r'[^A-Za-z0-9_-]+', '_', case_number).strip('_') or 'processo'}.pdf"
+        preview_path.write_bytes(pdf)
+        st.success("PDF especial de defesa gerado.")
+        st.download_button("Baixar PDF da defesa", pdf, file_name=f"defesa_{re.sub(r'[^A-Za-z0-9_-]+', '_', case_number).strip('_') or 'processo'}.pdf", mime="application/pdf", type="primary", use_container_width=True)
+        st.caption(f"Prévia criada em {preview_path}")
+
+
+def render_pacification_page():
+    st.markdown("<div class='mid-header'><div class='mid-brand'><div class='mid-monogram'>MN</div><div><p class='mid-kicker'>ᴍᴀɢɪsᴛʀᴀᴛᴜʀᴀ</p><div class='mid-title'>Pacificação</div></div></div><p class='mid-subtitle'>Conferência documental de operações</p></div>", unsafe_allow_html=True)
+    st.markdown("### Análise de representação")
+    st.caption("A leitura do documento é uma conferência inicial. O responsável jurídico pode confirmar ou corrigir cada requisito antes de emitir a decisão.")
+    uploaded_document = st.file_uploader("Representação policial em PDF", type=["pdf"], key="pacification_pdf")
+    first, second, third = st.columns(3)
+    case_number = first.text_input("Número do processo", key="pacification_case")
+    applicant = second.text_input("Órgão requerente", key="pacification_applicant")
+    area = third.text_input("Área a pacificar", key="pacification_area")
+    legal_name, legal_id = st.columns(2)
+    legal_name_value = legal_name.text_input("Nome do jurídico responsável *", key="pacification_legal_name")
+    legal_id_value = legal_id.text_input("ID do jurídico responsável", key="pacification_legal_id")
+    st.markdown("<div class='signature-studio'><p class='signature-studio-title'>Assinatura do documento</p><p class='signature-studio-copy'>Escolha uma assinatura digitada ou use uma imagem da assinatura real.</p></div>", unsafe_allow_html=True)
+    signature_mode = st.segmented_control("Modo", ["Digitada", "Imagem"], default="Digitada", key="pacification_signature_mode")
+    signature_style = st.selectbox("Estilo da assinatura", SIGNATURE_STYLE_OPTIONS, index=20, key="pacification_signature_style", disabled=signature_mode != "Digitada")
+    legal_signature = None
+    if signature_mode == "Imagem":
+        legal_signature = st.file_uploader("Imagem da assinatura", type=["png", "jpg", "jpeg"], key="pacification_signature", help="A imagem será inserida acima do nome no fim da decisão.")
+    else:
+        preview_name = escape(legal_name_value.strip() or "Nome do jurídico")
+        preview_class = signature_preview_class(signature_style)
+        st.markdown(f"<div class='signature-preview {preview_class}'><span class='signature-preview-name'>{preview_name}</span><span class='signature-preview-meta'>{escape(signature_style)}</span></div>", unsafe_allow_html=True)
+    if uploaded_document and st.button("Analisar representação", type="primary", use_container_width=True):
+        try:
+            findings, source = review_pacification_pdf(uploaded_document.getvalue())
+            st.session_state["pacification_findings"] = findings
+            st.session_state["pacification_filename"] = uploaded_document.name
+            st.session_state["pacification_details"] = extract_pacification_details(source)
+        except Exception as error:
+            st.error(f"Não foi possível analisar o PDF: {error}")
+    findings = st.session_state.get("pacification_findings")
+    if findings:
+        details = st.session_state.get("pacification_details", {})
+        if any(details.values()):
+            st.caption("Dados identificados no documento: " + " | ".join(f"{label}: {value}" for label, value in (("Processo", details.get("process")), ("Requerente", details.get("applicant")), ("Área", details.get("area"))) if value))
+        document_urls = findings[0].get("urls", [])
+        if document_urls:
+            st.caption(f"{len(document_urls)} link(s) recomposto(s) e identificado(s) no PDF.")
+            with st.expander("Links identificados no documento"):
+                for url in document_urls:
+                    st.link_button(url, url, use_container_width=True)
+        else:
+            st.info("Nenhum link legível foi identificado automaticamente. Itens dependentes de prova audiovisual ficam como não verificados até a conferência do jurídico.")
+        st.subheader("Conferência do jurídico")
+        reviewed_findings = []
+        for index, item in enumerate(findings):
+            left, right = st.columns([3, 1])
+            left.markdown(f"**{item['title']}**")
+            left.caption(item["guidance"])
+            with left.expander("Evidência localizada no PDF"):
+                st.write(item["evidence"])
+            statuses = ["Comprovado", "Não comprovado", "Não verificado"]
+            initial_index = statuses.index(item.get("status", "Comprovado" if item["passed"] else "Não comprovado"))
+            status = right.selectbox("Status", statuses, index=initial_index, key=f"pacification_status_{index}", label_visibility="collapsed")
+            reviewed_findings.append({**item, "passed": status == "Comprovado", "status": status})
+
+        approved = all(item["passed"] for item in reviewed_findings)
+        has_unproven = any(item["status"] == "Não comprovado" for item in reviewed_findings)
+        if approved:
+            st.success("Todos os requisitos foram confirmados pelo jurídico.")
+        elif has_unproven:
+            st.warning("Há requisitos não comprovados. A decisão automática é de indeferimento.")
+        else:
+            st.info("Há itens não verificados. Eles não causam indeferimento automático; confira os links e registre a decisão jurídica.")
+        proceed = st.checkbox("Prosseguir mesmo havendo itens não comprovados", key="pacification_proceed")
+        can_choose_decision = not has_unproven or proceed
+        decision_options = ["Deferir", "Indeferir"] if can_choose_decision else ["Indeferir"]
+        final_decision = st.selectbox("Decisão final", decision_options, key="pacification_final_decision")
+        if not legal_name_value.strip():
+            st.info("Informe o nome do jurídico responsável para liberar o PDF de decisão.")
+        else:
+            signature = legal_signature.getvalue() if legal_signature else None
+            decision_pdf = build_pacification_decision(
+                case_number or details.get("process", ""),
+                applicant or details.get("applicant", ""),
+                area or details.get("area", ""),
+                reviewed_findings,
+                final_decision,
+                legal_name_value,
+                legal_id_value,
+                signature,
+                signature_style,
+                proceed and not approved,
+            )
+            outcome = "deferida" if final_decision == "Deferir" else "indeferida"
+            st.download_button(f"Baixar decisão {outcome}", decision_pdf, file_name=f"decisao_pacificacao_{outcome}.pdf", mime="application/pdf", type="primary", use_container_width=True)
+
+
+def render_investigation_page():
+    st.markdown("<div class='mid-header'><div class='mid-brand'><div class='mid-monogram'>MN</div><div><p class='mid-kicker'>ᴍᴀɢɪsᴛʀᴀᴛᴜʀᴀ</p><div class='mid-title'>Pedido de Investigação</div></div></div><p class='mid-subtitle'>Decisão judicial sem análise automática de PDF</p></div>", unsafe_allow_html=True)
+    st.markdown("### Decisão de investigação")
+    st.caption("Informe os fundamentos do pedido. O texto será estruturado em redação judicial e o motivo será registrado na decisão.")
+    with st.form("investigation_form"):
+        first, second = st.columns(2)
+        case_number = first.text_input("Número do processo", key="investigation_case")
+        applicant = second.text_input("Órgão ou guarnição solicitante *", key="investigation_applicant")
+        organization = st.text_input("Nome da organização *", key="investigation_organization")
+        legal_name, legal_id = st.columns(2)
+        legal_name_value = legal_name.text_input("Nome do jurídico responsável *", key="investigation_legal_name")
+        legal_id_value = legal_id.text_input("ID do jurídico responsável", key="investigation_legal_id")
+        decision = st.segmented_control("Decisão", ["Deferir", "Indeferir"], default="Indeferir", key="investigation_decision")
+        reason_label = "Motivo do deferimento *" if decision == "Deferir" else "Motivo do indeferimento *"
+        reason = st.text_area(reason_label, key="investigation_reason", height=130, help="A redação será padronizada e inserida na fundamentação judicial.")
+        st.markdown("<div class='signature-studio'><p class='signature-studio-title'>Assinatura do documento</p><p class='signature-studio-copy'>Use uma assinatura digitada com o estilo desejado ou uma imagem da assinatura real.</p></div>", unsafe_allow_html=True)
+        signature_mode = st.segmented_control("Modo", ["Digitada", "Imagem"], default="Digitada", key="investigation_signature_mode")
+        signature_style = st.selectbox("Estilo da assinatura", SIGNATURE_STYLE_OPTIONS, index=20, key="investigation_signature_style", disabled=signature_mode != "Digitada")
+        legal_signature = None
+        if signature_mode == "Imagem":
+            legal_signature = st.file_uploader("Imagem da assinatura", type=["png", "jpg", "jpeg"], key="investigation_signature")
+        else:
+            preview_name = escape(legal_name_value.strip() or "Nome do jurídico")
+            preview_class = signature_preview_class(signature_style)
+            st.markdown(f"<div class='signature-preview {preview_class}'><span class='signature-preview-name'>{preview_name}</span><span class='signature-preview-meta'>{escape(signature_style)}</span></div>", unsafe_allow_html=True)
+        submitted = st.form_submit_button("Gerar decisão de investigação", type="primary", use_container_width=True)
+
+    if submitted:
+        if not all((applicant.strip(), organization.strip(), legal_name_value.strip(), reason.strip())):
+            st.error("Preencha o órgão solicitante, a organização, o nome do jurídico e o motivo da decisão.")
+            return
+        signature = legal_signature.getvalue() if legal_signature else None
+        decision_pdf = build_investigation_decision(
+            case_number,
+            applicant,
+            organization,
+            decision,
+            reason,
+            legal_name_value,
+            legal_id_value,
+            signature,
+            signature_style,
+        )
+        outcome = "deferida" if decision == "Deferir" else "indeferida"
+        st.success(f"Decisão {outcome} gerada com fundamentação judicial padronizada.")
+        st.download_button(
+            f"Baixar decisão {outcome}",
+            decision_pdf,
+            file_name=f"decisao_investigacao_{outcome}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+
+
 init_state()
 with st.sidebar:
     st.markdown("### ᴍᴀɢɪsᴛʀᴀᴛᴜʀᴀ")
-    active_module = st.radio("Módulos", ["Processos", "Pacificação", "Pedido de Investigação"], label_visibility="collapsed")
+    active_module = st.radio("Módulos", ["Processos", "Pacificação", "Pedido de Investigação", "Defesas"], label_visibility="collapsed")
     st.divider()
     st.caption("Sistema judicial de Cidade Alta")
 
@@ -1202,6 +1500,9 @@ if active_module == "Pacificação":
     st.stop()
 if active_module == "Pedido de Investigação":
     render_investigation_page()
+    st.stop()
+if active_module == "Defesas":
+    render_defense_page()
     st.stop()
 
 st.markdown(
